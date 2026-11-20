@@ -382,3 +382,10 @@
 .plan-panel .empty small { color: var(--color-mid-gray); font-size: 12px; }
 
 .stock-category-tabs{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 14px}.stock-category-tabs button{display:inline-flex;align-items:center;gap:9px;border:1px solid #e5e5e5;border-radius:18px;background:#f5f5f5;color:#737373;padding:8px 13px;font-size:12px;font-weight:600}.stock-category-tabs button span{display:inline-grid;place-items:center;min-width:20px;height:20px;border-radius:10px;background:#fff;color:#0a0a0a;padding:0 5px}.stock-category-tabs button.active{background:#0a0a0a;color:#fafafa;border-color:#0a0a0a}.stock-category-tabs button.active span{background:#333;color:#fff}
+
+/* Kode terakhir Material dan Alat pada halaman Master Barang */
+.master-item-actions{display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap}
+.master-last-codes{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.master-last-codes span{display:inline-flex;align-items:center;gap:4px;padding:9px 12px;border:1px solid var(--line,#e2e8f0);border-radius:999px;background:var(--surface,#fff);color:var(--color-ink,#172033);font-size:13px;white-space:nowrap}
+.master-last-codes b{font-weight:600}
+@media(max-width:650px){.master-item-actions{width:100%;justify-content:flex-start}.master-item-actions>.button{width:100%}.master-last-codes{width:100%}.master-last-codes span{flex:1;justify-content:center}}

@@ -719,3 +719,7 @@ footer { color: var(--color-mid-gray); font-size: 12px; }
   header h1 { font-size: 24px; }
   .hero h2 { font-size: 24px; }
 }
+
+/* Feedback visual khusus tombol salin OM; tidak mengubah komponen lain. */
+.copy-order-button { transition: background-color .18s ease, color .18s ease, transform .18s ease; }
+.copy-order-button.copied { color: #15803d; background: #dcfce7; transform: scale(1.06); }

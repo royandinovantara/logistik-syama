@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Boxes, ArrowDownToLine, ArrowUpFromLine, Archive,
   BarChart3, Camera, Menu, Package, Truck, LogOut, LockKeyhole,
   Plus, Search, Pencil, Trash2, X, Upload, RefreshCw, Image as ImageIcon,
-  Download, ChevronDown, Bell, CheckCircle2, Eye, LoaderCircle
+  Download, Copy, ChevronDown, Bell, CheckCircle2, Eye, LoaderCircle
 } from 'lucide-react';
 import type { Session } from '@supabase/supabase-js';
 import { db, ready } from './lib';
@@ -92,6 +92,7 @@ export default function App() {
   const [orderHeader, setOrderHeader] = useState({ om_no: '', order_date: today() });
   const [orderLines, setOrderLines] = useState([{ item_id: '', quantity: '', note: '' }]);
   const [orderSaving, setOrderSaving] = useState(false);
+  const [orderCopied, setOrderCopied] = useState(false);
   const [dismissedAlerts, setDismissedAlerts] = useState<string[]>([]);
   const [planItemId, setPlanItemId] = useState('');
   const [planQuantity, setPlanQuantity] = useState('');
@@ -301,9 +302,12 @@ export default function App() {
     else { notify('success', `OM ${order.om_no} dihapus permanen.`); await loadData(); }
   };
   const allocatedOrders = useMemo(() => {
+    // Progres OM ditentukan oleh urutan pencatatan, bukan tanggal transaksi.
+    // Barang Masuk yang sudah tercatat sebelum OM dibuat tidak boleh memenuhi OM tersebut,
+    // meskipun tanggal transaksi Barang Masuk lebih besar atau sama dengan tanggal OM.
     const receipts = incoming.flatMap(tx => incomingLines.filter(line => line.transaction_id === tx.id)
-      .map((line,index) => ({ id: `${tx.id}:${line.item_id}:${index}`, item_id: line.item_id, date: tx.transaction_date, quantity: Number(line.quantity) })))
-      .sort((a,b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+      .map((line,index) => ({ id: `${tx.id}:${line.item_id}:${index}`, item_id: line.item_id, created_at: tx.created_at, quantity: Number(line.quantity) })))
+      .sort((a,b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
     const available = new Map(receipts.map(receipt => [receipt.id, receipt.quantity]));
     const orders = [...materialOrders].sort((a,b) => a.order_date.localeCompare(b.order_date) || a.created_at.localeCompare(b.created_at));
     const result = new Map<string, Map<string, number>>();
@@ -313,7 +317,7 @@ export default function App() {
         let needed = Number(line.planned_quantity);
         let received = 0;
         for (const receipt of receipts) {
-          if (receipt.item_id !== line.item_id || receipt.date < order.order_date || needed <= 0) continue;
+          if (receipt.item_id !== line.item_id || receipt.created_at <= order.created_at || needed <= 0) continue;
           const left = available.get(receipt.id) || 0;
           const take = Math.min(left, needed);
           if (take > 0) { available.set(receipt.id, left - take); needed -= take; received += take; }
@@ -326,7 +330,7 @@ export default function App() {
   }, [materialOrders, incoming, incomingLines]);
   const orderText = () => {
     const orders = [...materialOrders]
-      .sort((a,b) => b.order_date.localeCompare(a.order_date) || b.created_at.localeCompare(a.created_at));
+      .sort((a,b) => a.order_date.localeCompare(b.order_date) || a.created_at.localeCompare(b.created_at));
     const dateFmt = (date: string) => { const [y,m,d] = date.split('-'); return `${d}/${m}/${y}`; };
     const blocks = orders.map(order => {
       const linesText = (order.material_order_lines || []).map(line => {
@@ -349,7 +353,9 @@ export default function App() {
       const area = document.createElement('textarea'); area.value = value; area.style.position = 'fixed'; area.style.opacity = '0';
       document.body.appendChild(area); area.select(); document.execCommand('copy'); area.remove();
     }
-    notify('success', 'Tersalin');
+    setOrderCopied(true);
+    notify('success', 'Update Material & Alat berhasil disalin.');
+    window.setTimeout(() => setOrderCopied(false), 1800);
   };
 
   const handleLogin = async (e: FormEvent<HTMLFormElement>) => {
@@ -362,6 +368,14 @@ export default function App() {
   };
   const handleLogout = async () => { if (!db) return; await db.auth.signOut({ scope: 'local' }); setPage('Dashboard'); };
   const shownItems = useMemo(() => items.filter(i => `${i.code} ${i.name} ${i.category}`.toLowerCase().includes(search.toLowerCase())), [items, search]);
+  const latestMasterCodes = useMemo(() => {
+    const latestCode = (category: 'MATERIAL' | 'ALAT') => items
+      .filter(item => item.category === category && item.code.trim())
+      .map(item => item.code.trim())
+      .sort((a, b) => a.localeCompare(b, 'id', { numeric: true, sensitivity: 'base' }))
+      .at(-1) || '—';
+    return { material: latestCode('MATERIAL'), alat: latestCode('ALAT') };
+  }, [items]);
   const activeItems = items.filter(i => i.is_active).sort((a, b) => {
     const categoryOrder: ItemCategory[] = ['MATERIAL', 'ALAT', 'SANITARY', 'MATERIAL_MEP'];
     return categoryOrder.indexOf(a.category) - categoryOrder.indexOf(b.category) || a.code.localeCompare(b.code, 'id', { numeric: true });
@@ -726,7 +740,7 @@ export default function App() {
         <section className="panel"><div className="panel-heading"><div><h3>Ringkasan Persediaan</h3><p>{totalStockKinds} jenis barang memiliki stok tersedia</p></div><button className="button dark-action" onClick={() => setPage('Stok Gudang')}>Lihat stok</button></div><div className="table"><table><thead><tr><th>KODE</th><th>NAMA BARANG</th><th>KATEGORI</th><th>STOK TERSEDIA</th><th>SISA (%)</th><th>SATUAN</th></tr></thead><tbody>{stocksWithPercent.filter(s => Number(s.stock) > 0).slice(0, 8).map(s => <tr key={s.item_id} className="stock-click-row" onClick={()=>{setMovementView('current');setSelectedStock(s.item_id);}}><td>{s.code}</td><td>{s.name}</td><td>{s.category}</td><td><b className={Number(s.stock) < 0 ? 'negative' : ''}>{formatNumber(Number(s.stock))}</b></td><td><span className={`percent-chip ${s.percent <= 30 ? 'percent-red' : s.percent <= 69 ? 'percent-yellow' : 'percent-green'}`}>{formatPercent(s.percent)}</span></td><td>{s.unit}</td></tr>)}</tbody></table>{!stocks.length && <p className="empty">Belum ada data persediaan.</p>}</div></section>
         <section className="panel"><h3>Akses Cepat</h3><div className="quick">{visibleMenus.slice(1).map(([name, Icon]) => <button key={name} onClick={() => setPage(name)}><Icon/>{name}</button>)}</div></section>
       </>}
-      {page === 'Kode Material & Alat' && <section className="panel"><div className="panel-heading"><div><h3>Master Barang</h3><p>Kelola kode, nama, kategori, dan satuan seluruh barang.</p></div>{isAdmin && <button className="button primary" onClick={() => openItemModal()}><Plus size={16}/>Tambah Barang</button>}</div><div className="searchbar"><Search size={17}/><input placeholder="Cari kode/nama barang..." value={search} onChange={e => setSearch(e.target.value)}/></div><div className="table"><table><thead><tr><th>KODE</th><th>NAMA BARANG</th><th>KATEGORI</th><th>SATUAN</th><th>STATUS</th>{isAdmin && <th>AKSI</th>}</tr></thead><tbody>{shownItems.map(item => <tr key={item.id}><td>{item.code}</td><td>{item.name}</td><td>{item.category==='MATERIAL_MEP'?'MATERIAL MEP':item.category}</td><td>{item.unit}</td><td><span className={item.is_active && (item.unit || '').trim() ? 'status active-status' : 'status'}>{(item.unit || '').trim() ? 'Aktif' : 'Tidak Aktif'}</span></td>{isAdmin && <td><div className="actions"><button title="Edit" onClick={() => openItemModal(item)}><Pencil size={15}/></button></div></td>}</tr>)}</tbody></table>{!shownItems.length && <p className="empty">Belum ada data barang. Tambahkan master barang terlebih dahulu.</p>}</div></section>}
+      {page === 'Kode Material & Alat' && <section className="panel"><div className="panel-heading"><div><h3>Master Barang</h3><p>Kelola kode, nama, kategori, dan satuan seluruh barang.</p></div><div className="master-item-actions"><div className="master-last-codes" aria-label="Kode terakhir per kategori"><span><b>Material:</b> {latestMasterCodes.material}</span><span><b>Alat:</b> {latestMasterCodes.alat}</span></div>{isAdmin && <button className="button primary" onClick={() => openItemModal()}><Plus size={16}/>Tambah Barang</button>}</div></div><div className="searchbar"><Search size={17}/><input placeholder="Cari kode/nama barang..." value={search} onChange={e => setSearch(e.target.value)}/></div><div className="table"><table><thead><tr><th>KODE</th><th>NAMA BARANG</th><th>KATEGORI</th><th>SATUAN</th><th>STATUS</th>{isAdmin && <th>AKSI</th>}</tr></thead><tbody>{shownItems.map(item => <tr key={item.id}><td>{item.code}</td><td>{item.name}</td><td>{item.category==='MATERIAL_MEP'?'MATERIAL MEP':item.category}</td><td>{item.unit}</td><td><span className={item.is_active && (item.unit || '').trim() ? 'status active-status' : 'status'}>{(item.unit || '').trim() ? 'Aktif' : 'Tidak Aktif'}</span></td>{isAdmin && <td><div className="actions"><button title="Edit" onClick={() => openItemModal(item)}><Pencil size={15}/></button></div></td>}</tr>)}</tbody></table>{!shownItems.length && <p className="empty">Belum ada data barang. Tambahkan master barang terlebih dahulu.</p>}</div></section>}
       {(page === 'Barang Masuk' || page === 'Barang Keluar') && <section className="panel"><div className="panel-heading"><div><h3>Riwayat {page}</h3><p>Satu transaksi dapat memuat beberapa jenis barang sekaligus.</p></div>{isAdmin && <button className="button primary" onClick={() => startTransaction(page === 'Barang Masuk' ? 'incoming' : 'outgoing')}><Plus size={16}/>Tambah {page}</button>}</div><div className="table"><table><thead><tr><th>NO. TRANSAKSI</th><th>TANGGAL</th><th>JAM</th>{page === 'Barang Masuk' && <th>DRIVER</th>}<th>CATATAN</th>{isAdmin&&<th>AKSI</th>}</tr></thead><tbody>{(page === 'Barang Masuk' ? incoming : outgoing).map(t => <tr key={t.id}><td><b>{t.transaction_no}</b></td><td>{t.transaction_date}</td><td>{new Date(t.created_at).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit',hour12:false})}</td>{page === 'Barang Masuk' && <td>{t.driver_name || '—'}</td>}<td>{t.notes || '—'}</td>{isAdmin&&<td><button className='icon-button' title='Edit transaksi' onClick={()=>startEditTransaction(page==='Barang Masuk'?'incoming':'outgoing',t)}><Pencil size={15}/></button><button className='icon-button' title='Hapus transaksi' onClick={()=>void deleteTransaction(page==='Barang Masuk'?'incoming':'outgoing',t.id)}><Trash2 size={15}/></button></td>}</tr>)}</tbody></table>{!(page === 'Barang Masuk' ? incoming : outgoing).length && <p className="empty">Belum ada transaksi.</p>}</div></section>}
       {page === 'Stok Gudang' && <section className="panel"><div className="panel-heading"><div><h3>Persediaan Gudang</h3><p>Persentase 100% dimulai dari stok awal; pengeluaran mengurangi persentase.</p></div></div><div className="stock-category-tabs" role="group" aria-label="Filter kategori stok">{([{value:'ALL',label:'Semua'},{value:'MATERIAL',label:'Material'},{value:'ALAT',label:'Alat'},{value:'SANITARY',label:'Sanitary'},{value:'MATERIAL_MEP',label:'Material MEP'}] as const).map(option=><button type="button" key={option.value} className={stockCategoryFilter===option.value?'active':''} onClick={()=>setStockCategoryFilter(option.value)}>{option.label}<span>{option.value==='ALL'?stocks.length:stocks.filter(s=>s.category===option.value).length}</span></button>)}</div><div className="searchbar"><Search size={17}/><input placeholder="Cari kode/nama barang..." value={search} onChange={e => setSearch(e.target.value)}/></div><div className="table"><table><thead><tr><th>KODE</th><th>NAMA BARANG</th><th>KATEGORI</th><th>STOK TERSEDIA</th><th>SISA (%)</th><th>SATUAN</th></tr></thead><tbody>{stocksWithPercent.filter(s => (stockCategoryFilter==='ALL'||s.category===stockCategoryFilter) && `${s.code} ${s.name}`.toLowerCase().includes(search.toLowerCase())).map(s => <tr key={s.item_id} className="stock-click-row" onClick={()=>{setMovementView('current');setSelectedStock(s.item_id);}}><td>{s.code}</td><td>{s.name}</td><td>{s.category==='MATERIAL_MEP'?'MATERIAL MEP':s.category}</td><td><b className={Number(s.stock) < 0 ? 'negative' : ''}>{formatNumber(Number(s.stock))}</b></td><td><span className={`percent-chip ${s.percent <= 30 ? 'percent-red' : s.percent <= 69 ? 'percent-yellow' : 'percent-green'}`}>{formatPercent(s.percent)}</span></td><td>{s.unit}</td></tr>)}</tbody></table>{!stocks.length && <p className="empty">Belum ada data stok.</p>}</div></section>}
       {page === 'Monitoring' && <section className="panel"><div className="panel-heading"><div><h3>Monitoring Barang Masuk & Keluar</h3><p>Pilih bulan untuk melihat aktivitas dalam 5 periode mingguan (masing-masing 7 hari, periode terakhir menyesuaikan akhir bulan).</p></div><label className="month-filter">Pilih bulan<input type="month" value={monitorMonth} onChange={e => setMonitorMonth(e.target.value)}/></label><div className="export-actions"><button className="button secondary small" onClick={()=>void downloadMonitoring('pdf')}>Download PDF</button><button className="button secondary small" onClick={()=>void downloadMonitoring('excel')}>Download Excel</button></div></div>{monthPeriods.map(period => { const periodIn = incoming.filter(t => t.transaction_date >= period.start && t.transaction_date <= period.end); const periodOut = outgoing.filter(t => t.transaction_date >= period.start && t.transaction_date <= period.end); return <article className="monitor-period" key={period.number}><div className="period-head"><div><b>Periode {period.number}</b><small>{period.label}</small></div><div className="period-counts"><span className="in-count">Masuk: {periodIn.length}</span><span className="out-count">Keluar: {periodOut.length}</span></div></div><div className="monitor-columns"><div><h4><ArrowDownToLine size={16}/> Barang Masuk</h4>{periodIn.length ? periodIn.map(t => <div role="button" tabIndex={0} className="monitor-transaction monitor-click" key={t.id} onClick={() => setSelectedMonitor({kind:'incoming',id:t.id})} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setSelectedMonitor({kind:'incoming',id:t.id});}}}><b>{t.transaction_date}</b><small>{new Date(t.created_at).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit',hour12:false})} · {t.driver_name || 'Driver tidak dicantumkan'}</small><ul>{incomingLines.filter(line => line.transaction_id === t.id).map((line, i) => { const item = Array.isArray(line.items) ? line.items[0] : line.items; return <li key={`${line.item_id}-${i}`}>{item?.name || 'Barang'}: {formatNumber(Number(line.quantity))} {line.unit}</li>; })}</ul>{t.notes && <small>Catatan: {t.notes}</small>}{isAdmin&&<button type='button' className='icon-button' title='Hapus transaksi' onClick={e=>{e.stopPropagation();void deleteTransaction('incoming',t.id);}}><Trash2 size={15}/></button>}</div>) : <p className="empty small-empty">Tidak ada barang masuk.</p>}</div><div><h4><ArrowUpFromLine size={16}/> Barang Keluar</h4>{periodOut.length ? periodOut.map(t => <div role="button" tabIndex={0} className="monitor-transaction monitor-click" key={t.id} onClick={() => setSelectedMonitor({kind:'outgoing',id:t.id})} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setSelectedMonitor({kind:'outgoing',id:t.id});}}}><b>{t.transaction_date}</b><small>{new Date(t.created_at).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit',hour12:false})}</small><ul>{outgoingLines.filter(line => line.transaction_id === t.id).map((line, i) => { const item = Array.isArray(line.items) ? line.items[0] : line.items; return <li key={`${line.item_id}-${i}`}>{item?.name || 'Barang'}: {formatNumber(Number(line.quantity))} {line.unit}</li>; })}</ul>{t.notes && <small>Catatan: {t.notes}</small>}{isAdmin&&<button type='button' className='icon-button' title='Hapus transaksi' onClick={e=>{e.stopPropagation();void deleteTransaction('outgoing',t.id);}}><Trash2 size={15}/></button>}</div>) : <p className="empty small-empty">Tidak ada barang keluar.</p>}</div></div></article>; })}<p className="hint">Monitoring menggunakan tanggal transaksi. Data yang ditampilkan mengikuti transaksi yang berhasil dimuat dari database.</p></section>}
@@ -748,8 +762,8 @@ export default function App() {
           <button className="button primary" type="submit" disabled={orderSaving}>{orderSaving?'Menyimpan...':<><Plus size={15}/>Tambah Rencana</>}</button>
         </form>}
         <section className="panel order-project">
-          <div className="panel-heading"><div><h3>Update Material & Alat Proyek SYAMA</h3></div><button type="button" className="icon-button" title="Salin seluruh OM" aria-label="Salin seluruh OM" onClick={()=>void copyOrderText()}><Download size={17}/></button></div>
-          {[...materialOrders].sort((a,b)=>b.order_date.localeCompare(a.order_date)).map(order=><article className="plan-row" key={order.id} style={{display:'block',position:'relative'}}>
+          <div className="panel-heading"><div><h3>Update Material & Alat Proyek SYAMA</h3></div><button type="button" className={`icon-button copy-order-button${orderCopied ? ' copied' : ''}`} title={orderCopied ? "Berhasil disalin" : "Salin seluruh OM"} aria-label={orderCopied ? "Berhasil disalin" : "Salin seluruh OM"} onClick={()=>void copyOrderText()}>{orderCopied ? <CheckCircle2 size={18}/> : <Copy size={17}/>}</button></div>
+          {[...materialOrders].sort((a,b)=>a.order_date.localeCompare(b.order_date) || a.created_at.localeCompare(b.created_at)).map(order=><article className="plan-row" key={order.id} style={{display:'block',position:'relative'}}>
             <div style={{display:'flex',justifyContent:'space-between',gap:12}}><strong>OM: {order.om_no}　{order.order_date.split('-').reverse().join('/')}</strong>{isAdmin&&<button className="icon-button" title="Hapus OM" onClick={()=>void deleteMaterialOrder(order)}><X size={17}/></button>}</div>
             <ul>{(order.material_order_lines||[]).map(line=>{const item=items.find(entry=>entry.id===line.item_id);const received=allocatedOrders.get(order.id)?.get(line.id)||0;const qty=Number(line.planned_quantity);const status=received>=qty?'✅':received>0?'🔄':'❌';return <li key={line.id}>{item?.name||'Barang'} = {formatNumber(qty)} {line.unit} {status}{received>0&&received<qty?` (kurang ${formatNumber(qty-received)} ${line.unit})`:''}{line.note?` (${line.note})`:''}</li>;})}</ul>
           </article>)}
